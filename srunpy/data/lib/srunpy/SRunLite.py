@@ -1,6 +1,12 @@
 """
 This module provides functionality to interact with the Srun authentication system.
 Modified from: https://github.com/iskoldt-X/SRUN-authenticator
+
+Patched 2026-11-18:
+  - every requests call now has timeout=10 (previously unbounded;
+    a silently-dropped TCP connection could hang the loop forever)
+  - is_connected(): only treat error=='ok' as online; any other
+    server response is treated as offline so a login is attempted
 """
 
 import json
@@ -12,6 +18,8 @@ import hashlib
 import math
 
 from urllib.parse import urlparse, parse_qs
+
+REQ_TIMEOUT = 10
 
 def get_md5(password, token):
     return hmac.new(token.encode(), password.encode(), hashlib.md5).hexdigest()
@@ -155,7 +163,7 @@ class SrunClient():
         return i
 
     def init_getip(self):
-        res = requests.get(self.get_ip_api,verify=self.verify)
+        res = requests.get(self.get_ip_api,verify=self.verify,timeout=REQ_TIMEOUT)
         data = json.loads(res.text[res.text.find('(')+1:-1])
         ip = data.get('client_ip') or data.get('online_ip')
         username = data.get('user_name')
@@ -169,19 +177,21 @@ class SrunClient():
             "_": int(time.time() * 1000),
         }
         test = requests.Session()
-        get_challenge_res = test.get(self.get_challenge_api, params=get_challenge_params, headers=self.header,verify=self.verify)
+        get_challenge_res = test.get(self.get_challenge_api, params=get_challenge_params, headers=self.header,verify=self.verify,timeout=REQ_TIMEOUT)
         token = re.search('"challenge":"(.*?)"', get_challenge_res.text).group(1)
         return token
 
     def is_connected(self):
         try:
-            res = requests.get(self.get_ip_api,verify=self.verify)
+            res = requests.get(self.get_ip_api,verify=self.verify,timeout=REQ_TIMEOUT)
             data = json.loads(res.text[res.text.find('(')+1:-1])
-            if 'error' in data and data['error']=='not_online_error':
-                return True, False, data
-            else:
+            if data.get('error') == 'ok':
                 return True, True, data
-        except:
+            if data.get('error') == 'not_online_error':
+                return True, False, data
+            # unexpected server response: treat as offline so a login is attempted
+            return True, False, data
+        except Exception:
             return False, False, {}
 
     def do_complex_work(self,username,password,ip,token):
@@ -192,12 +202,12 @@ class SrunClient():
         return i, hmd5, chksum
 
     def update_acid(self):
-        response = requests.get(url=self.init_url.replace('https','http',1), allow_redirects=True)
+        response = requests.get(url=self.init_url.replace('https','http',1), allow_redirects=True, timeout=REQ_TIMEOUT)
         parsed_url = urlparse(response.url)
         query_params = parse_qs(parsed_url.query)
         if 'ac_id' in query_params and len(query_params['ac_id']) > 0:
             self.ac_id = query_params['ac_id'][0]
-            # print('ac_id:',self.ac_id)
+            # print('ac_id:', self.ac_id)
 
     def login(self,username,password):
         is_available, is_online, _ = self.is_connected()
@@ -208,7 +218,7 @@ class SrunClient():
         token = self.get_token(username,ip)
         i, hmd5, chksum = self.do_complex_work(username,password,ip,token)
         srun_portal_params = {
-            'callback': 'jQuery11240645308969735664_' + str(int(time.time() * 1000)),
+            'callback': "jQuery11240645308969735664_" + str(int(time.time() * 1000)),
             'action': 'login',
             'username': username,
             'password': '{MD5}' + hmd5,
@@ -224,11 +234,11 @@ class SrunClient():
             '_': int(time.time() * 1000)
         }
         test = requests.Session()
-        srun_portal_res = test.get(self.srun_portal_api, params=srun_portal_params, headers=self.header,verify=self.verify)
+        srun_portal_res = test.get(self.srun_portal_api, params=srun_portal_params, headers=self.header,verify=self.verify,timeout=REQ_TIMEOUT)
         srun_portal_res = srun_portal_res.text
         data = json.loads(srun_portal_res[srun_portal_res.find('(')+1:-1])
         return data.get('error') # == 'ok'
-    
+
     def logout(self):
         is_available, is_online, _ = self.is_connected()
         if not is_available or not is_online:
@@ -244,6 +254,6 @@ class SrunClient():
             'sign': sign
         }
         test = requests.Session()
-        user_dm_res = test.get(self.rad_user_dm_api, params=user_dm_params, headers=self.header,verify=self.verify)
+        user_dm_res = test.get(self.rad_user_dm_api, params=user_dm_params, headers=self.header,verify=self.verify,timeout=REQ_TIMEOUT)
         user_dm_res = user_dm_res.text
         return user_dm_res=='logout_ok'

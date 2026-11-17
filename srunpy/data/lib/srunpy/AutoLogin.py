@@ -39,22 +39,43 @@ def main(host,protcol,username,password,sleeptime,ssl_verify):
         sleeptime = int(sleeptime)
         if sleeptime < 1:
             sleeptime = 1
-            print('SRUN_SLEEPTIME too small, set to 1')
+            print('SRUN_SLEEPTIME too small, set to 1', flush=True)
 
     def logger(msg):
         time_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
-        print(f'[Srun AutoLogin {time_str}] {msg}')
+        print(f'[Srun AutoLogin {time_str}] {msg}', flush=True)
         Popen(['logger', '-t', 'srun-autologin', msg])
 
-    logger('Hello from Srun AutoLogin!')
+    logger(f'service started, host={host}, sleeptime={sleeptime}s')
+
+    # log on state change; while a problem persists, one heartbeat line
+    # every SRUN_HEARTBEAT seconds (default 10 min) instead of every cycle
+    heartbeat = int(os.getenv('SRUN_HEARTBEAT', '600'))
+    if heartbeat < 5:
+        heartbeat = 5
+
+    last_key = None
+    key_since = 0.0
+    last_beat = 0.0
+
+    def log_state(msg, key, beat=True):
+        nonlocal last_key, key_since, last_beat
+        now = time.time()
+        if key != last_key:
+            logger(msg)
+            last_key, key_since, last_beat = key, now, now
+        elif beat and now - last_beat >= heartbeat:
+            mins = int((now - key_since) // 60)
+            logger(f'{msg} (persisting for {mins} min)')
+            last_beat = now
 
     while True:
         try:
             is_available, is_online, _ = srun.is_connected()
             if not is_available:
-                logger('Login server not available')
+                log_state('Login server not available', 'unreachable')
             elif not is_online:
-                logger('Not online, try to login')
+                log_state('Not online, try to login', 'offline')
                 try:
                     for i in range(3):
                         result = srun.login(username, password)
@@ -63,14 +84,20 @@ def main(host,protcol,username,password,sleeptime,ssl_verify):
                             break
                         else:
                             if result != 'challenge_expire_error':
-                                logger(f'Login failed: {result}')
+                                log_state(f'Login failed: {result}', f'login_failed:{result}')
                                 break
                             else:
-                                logger('Challenge expired, retry')
+                                log_state('Challenge expired, retry', 'challenge_retry')
                 except Exception as e:
-                    logger(f'Login failed: {e}')
+                    log_state(f'Login failed: {e}', f'login_error:{e}')
+            else:
+                if last_key is not None and last_key != 'online':
+                    dur = int(time.time() - key_since)
+                    log_state(f'Online (previous state [{last_key}] lasted {dur} s)', 'online', beat=False)
+                else:
+                    log_state('Online', 'online', beat=False)
         except Exception as e:
-            logger(f'Error: {e}')
+            log_state(f'Error: {e}', f'error:{e}')
         time.sleep(sleeptime)
 
 if __name__ == '__main__':
