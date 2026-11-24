@@ -10,7 +10,7 @@ enable = s:option(Flag, "enable", translate("启用"))
 running = s:option(DummyValue, "_running", translate("运行状态"))
 running.rawhtml = true
 function running.cfgvalue(self, section)
-    local status = luci.sys.exec("service srunpy status")
+    local status = luci.sys.exec("/etc/init.d/srunpy status")
     if status:match("running") then
         return "<span style='color:green'>" .. translate("正在运行") .. "</span>"
     end

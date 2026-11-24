@@ -1,5 +1,5 @@
 Package: luci-app-srunpy
-Version: 1.0.0
+Version: 1.0.1
 Depends: srunpy, luci-compat
 Source: packages/srunpy
 SourceName: luci-app-srunpy
